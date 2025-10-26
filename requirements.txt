@@ -1,0 +1,16 @@
+azure-functions
+azure-storage-blob
+azure-keyvault-secrets
+azure-identity
+azure-servicebus
+requests
+cdsapi
+xarray
+netcdf4
+matplotlib
+cartopy
+numpy
+pandas
+pillow
+geopandas
+rasterio
