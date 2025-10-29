@@ -11,6 +11,3 @@ matplotlib
 cartopy
 numpy
 pandas
-pillow
-geopandas
-rasterio
