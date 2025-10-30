@@ -2,6 +2,7 @@ import os
 import tempfile
 import zipfile
 import logging
+import time
 import cdsapi
 import xarray as xr
 import matplotlib
@@ -39,7 +40,8 @@ class ClimateAnalysisService:
         Returns:
             Dictionary with paths to downloaded zip files for each scenario
         """
-        logging.info(f"Downloading climate data for coordinates: lat={lat}, lon={lon}")
+        logging.info(f"[DOWNLOAD] Starting download for coordinates: lat={lat}, lon={lon}")
+        step_start = time.time()
         
         # Round coordinates to 2 decimal places (CDS API requirement)
         lat = round(lat, 2)
@@ -54,7 +56,7 @@ class ClimateAnalysisService:
             round(lon + 1.5, 2)   # East
         ]
         
-        logging.info(f"Rounded coordinates and area: lat={lat}, lon={lon}, area={area}")
+        logging.info(f"[DOWNLOAD] Rounded coordinates and area: lat={lat}, lon={lon}, area={area}")
         
         # Base request parameters
         base_params = {
@@ -85,7 +87,8 @@ class ClimateAnalysisService:
         }
         
         for experiment, scenario_code in scenarios.items():
-            logging.info(f"Downloading data for scenario: {experiment}")
+            scenario_start = time.time()
+            logging.info(f"[DOWNLOAD] Starting CDS request for scenario: {experiment}")
             
             # Create request parameters for this scenario
             request_params = base_params.copy()
@@ -96,19 +99,25 @@ class ClimateAnalysisService:
             
             try:
                 # Make the API request
+                logging.info(f"[DOWNLOAD] Submitting CDS API request for {experiment}...")
                 self.client.retrieve(
                     'projections-cmip6',
                     request_params,
                     download_path
                 )
                 
-                logging.info(f"Successfully downloaded {experiment} data to {download_path}")
+                scenario_duration = time.time() - scenario_start
+                file_size = os.path.getsize(download_path)
+                logging.info(f"[DOWNLOAD] ✓ Successfully downloaded {experiment} in {scenario_duration:.2f}s")
+                logging.info(f"[DOWNLOAD] File: {download_path} ({file_size:,} bytes)")
                 downloaded_files[scenario_code] = download_path
                 
             except Exception as e:
-                logging.error(f"Failed to download {experiment} data: {e}")
+                logging.error(f"[DOWNLOAD] ✗ Failed to download {experiment} data: {e}")
                 raise Exception(f"CDS API download failed for {experiment}: {str(e)}")
         
+        total_duration = time.time() - step_start
+        logging.info(f"[DOWNLOAD] ✓ All downloads complete in {total_duration:.2f}s")
         return downloaded_files
     
     def extract_netcdf_files(self, zip_files: Dict[str, str], extract_dir: str) -> Dict[str, str]:
@@ -122,12 +131,14 @@ class ClimateAnalysisService:
         Returns:
             Dictionary mapping scenario codes to extracted .nc file paths
         """
-        logging.info("Extracting NetCDF files from zip archives")
+        logging.info(f"[EXTRACT] Starting extraction of {len(zip_files)} zip files")
+        step_start = time.time()
         
         netcdf_files = {}
         
         for scenario_code, zip_path in zip_files.items():
-            logging.info(f"Extracting {scenario_code} zip file: {zip_path}")
+            scenario_start = time.time()
+            logging.info(f"[EXTRACT] Extracting {scenario_code} from {zip_path}")
             
             # Create scenario-specific extraction directory
             scenario_dir = os.path.join(extract_dir, scenario_code)
@@ -144,17 +155,21 @@ class ClimateAnalysisService:
                     raise Exception(f"No .nc file found in extracted {scenario_code} zip")
                 
                 if len(nc_files) > 1:
-                    logging.warning(f"Multiple .nc files found for {scenario_code}, using first one")
+                    logging.warning(f"[EXTRACT] Multiple .nc files found for {scenario_code}, using first one")
                 
                 nc_file_path = os.path.join(scenario_dir, nc_files[0])
                 netcdf_files[scenario_code] = nc_file_path
                 
-                logging.info(f"Extracted {scenario_code} NetCDF file: {nc_file_path}")
+                scenario_duration = time.time() - scenario_start
+                file_size = os.path.getsize(nc_file_path)
+                logging.info(f"[EXTRACT] ✓ Extracted {scenario_code} in {scenario_duration:.2f}s ({file_size:,} bytes)")
                 
             except Exception as e:
-                logging.error(f"Failed to extract {scenario_code} zip file: {e}")
+                logging.error(f"[EXTRACT] ✗ Failed to extract {scenario_code} zip file: {e}")
                 raise Exception(f"Zip extraction failed for {scenario_code}: {str(e)}")
         
+        total_duration = time.time() - step_start
+        logging.info(f"[EXTRACT] ✓ All extractions complete in {total_duration:.2f}s")
         return netcdf_files
     
     def extract_apr_may_data(self, file_path: str, scenario_name: str) -> Tuple[Optional[pd.DataFrame], Optional[float], Optional[float]]:
@@ -168,12 +183,14 @@ class ClimateAnalysisService:
         Returns:
             Tuple of (DataFrame with April-May averages, latitude, longitude)
         """
-        logging.info(f"Processing {scenario_name} file: {file_path}")
+        logging.info(f"[PROCESS] Starting data extraction for {scenario_name}")
+        step_start = time.time()
         
         try:
             # Open the dataset
+            logging.info(f"[PROCESS] Opening NetCDF file: {file_path}")
             ds = xr.open_dataset(file_path)
-            logging.info(f"{scenario_name} file loaded successfully")
+            logging.info(f"[PROCESS] ✓ {scenario_name} file loaded successfully")
             
             # Identify lat/lon variable names
             if 'lat' in ds.dims:
@@ -193,13 +210,11 @@ class ClimateAnalysisService:
             # Get coordinates
             lat_point = float(ds[lat_var].values[0])
             lon_point = float(ds[lon_var].values[0])
-            logging.info(f"Using coordinates: {lat_var}={lat_point}, {lon_var}={lon_point}")
+            logging.info(f"[PROCESS] Using coordinates: {lat_var}={lat_point}, {lon_var}={lon_point}")
             
             # Identify temperature variable
             if 'tasmax' in ds.data_vars:
                 temp_var = 'tasmax'
-            elif 'tasmin' in ds.data_vars:
-                temp_var = 'tasmin'
             else:
                 for var in ds.data_vars:
                     if 'temp' in var.lower() or 'tas' in var.lower():
@@ -208,7 +223,7 @@ class ClimateAnalysisService:
                 else:
                     raise Exception(f"Could not find temperature variable in {list(ds.data_vars.keys())}")
             
-            logging.info(f"Using temperature variable: {temp_var}")
+            logging.info(f"[PROCESS] Using temperature variable: {temp_var}")
             
             # Extract time series for the selected location
             coords = {lat_var: lat_point, lon_var: lon_point}
@@ -217,13 +232,14 @@ class ClimateAnalysisService:
             # Convert Kelvin to Celsius if needed
             sample_value = float(ts_data.isel(time=0).values.flatten()[0])
             if sample_value > 100:  # Likely Kelvin
-                logging.info(f"Converting from Kelvin to Celsius (sample value: {sample_value})")
+                logging.info(f"[PROCESS] Converting from Kelvin to Celsius (sample value: {sample_value})")
                 ts_data_celsius = ts_data - 273.15
             else:
-                logging.info(f"Data appears to be in Celsius (sample value: {sample_value})")
+                logging.info(f"[PROCESS] Data appears to be in Celsius (sample value: {sample_value})")
                 ts_data_celsius = ts_data
             
             # Process data manually to handle cftime objects
+            logging.info(f"[PROCESS] Processing {len(ds.time)} time points...")
             years = []
             months = []
             temperatures = []
@@ -244,7 +260,7 @@ class ClimateAnalysisService:
             
             # Filter for years 2040-2050 only
             df = df[(df['year'] >= 2040) & (df['year'] <= 2050)]
-            logging.info(f"Filtered data to years 2040-2050. Available years: {sorted(df['year'].unique())}")
+            logging.info(f"[PROCESS] Filtered data to years 2040-2050. Available years: {sorted(df['year'].unique())}")
             
             # Filter for April and May
             apr_may_data = df[(df['month'] == 4) | (df['month'] == 5)]
@@ -253,14 +269,15 @@ class ClimateAnalysisService:
             annual_apr_may = apr_may_data.groupby('year')['temperature'].mean().reset_index()
             annual_apr_may['scenario'] = scenario_name
             
-            logging.info(f"Extracted April-May data for {scenario_name} (years {annual_apr_may['year'].min()}-{annual_apr_may['year'].max()})")
+            duration = time.time() - step_start
+            logging.info(f"[PROCESS] ✓ Extracted April-May data for {scenario_name} in {duration:.2f}s (years {annual_apr_may['year'].min()}-{annual_apr_may['year'].max()})")
             
             ds.close()
             
             return annual_apr_may, lat_point, lon_point
             
         except Exception as e:
-            logging.error(f"Error processing {scenario_name} file: {e}")
+            logging.error(f"[PROCESS] ✗ Error processing {scenario_name} file: {e}")
             raise Exception(f"NetCDF processing failed for {scenario_name}: {str(e)}")
     
     def create_comparison_visualization(self, ssp245_data: pd.DataFrame, ssp585_data: pd.DataFrame, 
@@ -278,13 +295,15 @@ class ClimateAnalysisService:
         Returns:
             Path to the saved visualization
         """
-        logging.info("Creating comparison visualization")
+        logging.info(f"[VISUALIZE] Starting visualization creation")
+        step_start = time.time()
         
         # Set fixed year range to 2040-2050
         min_year = 2040
         max_year = 2050
         
         # Create figure
+        logging.info(f"[VISUALIZE] Creating matplotlib figure...")
         plt.figure(figsize=(14, 8))
         plt.style.use('seaborn-v0_8-whitegrid')
         
@@ -375,10 +394,13 @@ class ClimateAnalysisService:
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
         # Save figure
+        logging.info(f"[VISUALIZE] Saving figure to {output_path}...")
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        logging.info(f"Saved comparison visualization to: {output_path}")
+        duration = time.time() - step_start
+        file_size = os.path.getsize(output_path)
+        logging.info(f"[VISUALIZE] ✓ Saved visualization in {duration:.2f}s ({file_size:,} bytes)")
         
         return output_path
     
@@ -394,29 +416,43 @@ class ClimateAnalysisService:
         Returns:
             Dictionary with results including visualization path and metadata
         """
-        logging.info(f"Starting climate analysis for demo_id={demo_id}, lat={lat}, lon={lon}")
+        logging.info(f"[{demo_id}] ========== CLIMATE ANALYSIS START ==========")
+        logging.info(f"[{demo_id}] Coordinates: lat={lat}, lon={lon}")
+        workflow_start = time.time()
         
         # Create output filename
         output_filename = f"{demo_id}_climate_comparison.png"
         
         # Create temporary directory for all operations
         temp_dir = tempfile.mkdtemp()
+        logging.info(f"[{demo_id}] Created temp directory: {temp_dir}")
         
         # Define visualization path in temp directory (will persist until cleanup)
         visualization_path = os.path.join(temp_dir, output_filename)
         
         try:
             # Step 1: Download data from CDS API
+            logging.info(f"[{demo_id}] === STEP 1: CDS DOWNLOAD ===")
+            step1_start = time.time()
             zip_files = self.download_climate_data(lat, lon, temp_dir)
+            logging.info(f"[{demo_id}] ✓ Step 1 complete in {time.time() - step1_start:.2f}s")
             
             # Step 2: Extract NetCDF files
+            logging.info(f"[{demo_id}] === STEP 2: ZIP EXTRACTION ===")
+            step2_start = time.time()
             netcdf_files = self.extract_netcdf_files(zip_files, temp_dir)
+            logging.info(f"[{demo_id}] ✓ Step 2 complete in {time.time() - step2_start:.2f}s")
             
             # Step 3: Process both scenarios
+            logging.info(f"[{demo_id}] === STEP 3: DATA PROCESSING ===")
+            step3_start = time.time()
+            
+            logging.info(f"[{demo_id}] Processing SSP2-4.5 scenario...")
             ssp245_data, lat_point_245, lon_point_245 = self.extract_apr_may_data(
                 netcdf_files['ssp245'], "SSP2-4.5"
             )
             
+            logging.info(f"[{demo_id}] Processing SSP5-8.5 scenario...")
             ssp585_data, lat_point_585, lon_point_585 = self.extract_apr_may_data(
                 netcdf_files['ssp585'], "SSP5-8.5"
             )
@@ -424,13 +460,18 @@ class ClimateAnalysisService:
             # Use coordinates from first dataset
             lat_point = lat_point_245
             lon_point = lon_point_245
+            logging.info(f"[{demo_id}] ✓ Step 3 complete in {time.time() - step3_start:.2f}s")
             
             # Step 4: Create visualization in temp directory
+            logging.info(f"[{demo_id}] === STEP 4: VISUALIZATION CREATION ===")
+            step4_start = time.time()
             created_visualization_path = self.create_comparison_visualization(
                 ssp245_data, ssp585_data, lat_point, lon_point, visualization_path
             )
+            logging.info(f"[{demo_id}] ✓ Step 4 complete in {time.time() - step4_start:.2f}s")
             
             # Step 5: Validate visualization file was created successfully
+            logging.info(f"[{demo_id}] === STEP 5: VALIDATION ===")
             if not os.path.exists(created_visualization_path):
                 raise Exception(f"Visualization file not found at {created_visualization_path}")
             
@@ -438,9 +479,10 @@ class ClimateAnalysisService:
             if file_size == 0:
                 raise Exception("Visualization file is empty")
             
-            logging.info(f"✓ Successfully created visualization: {created_visualization_path} ({file_size:,} bytes)")
+            logging.info(f"[{demo_id}] ✓ Visualization validated: {created_visualization_path} ({file_size:,} bytes)")
             
-            logging.info("Climate analysis completed successfully")
+            workflow_duration = time.time() - workflow_start
+            logging.info(f"[{demo_id}] ========== CLIMATE ANALYSIS COMPLETE in {workflow_duration:.2f}s ==========")
             
             return {
                 'success': True,
@@ -455,14 +497,15 @@ class ClimateAnalysisService:
             }
             
         except Exception as e:
-            logging.error(f"Climate analysis failed: {e}")
+            logging.error(f"[{demo_id}] ========== CLIMATE ANALYSIS FAILED ==========")
+            logging.exception(f"[{demo_id}] Error: {e}")
             # Clean up temp directory on failure
             try:
                 import shutil
                 shutil.rmtree(temp_dir)
-                logging.info(f"Cleaned up temp directory after failure: {temp_dir}")
+                logging.info(f"[{demo_id}] Cleaned up temp directory after failure: {temp_dir}")
             except Exception as cleanup_error:
-                logging.warning(f"Failed to clean up temp directory: {cleanup_error}")
+                logging.warning(f"[{demo_id}] Failed to clean up temp directory: {cleanup_error}")
             
             return {
                 'success': False,

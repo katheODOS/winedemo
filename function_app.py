@@ -1,5 +1,7 @@
 import logging
-logging.Logger.root.level = 10
+import sys
+
+logging.getLogger().setLevel(logging.INFO)
 
 import os
 import tempfile
@@ -118,7 +120,7 @@ def _upload_blob(src_path, blob_name):
 
 def _process_and_callback(lat, lon, name, callback_url, task_id, demo_ID):
     """Background worker: generate climate analysis, upload results, and POST to callback_url."""
-    
+    #raise Exception("TESTING - If you see this in logs, function is running!")
     logging.info(f"[{task_id}] Background task started for: {demo_ID} | {name} -> {lat},{lon}")
     
     temp_dir_to_cleanup = None
@@ -284,17 +286,18 @@ def climate(req: func.HttpRequest) -> func.HttpResponse:
 
     # Start background processing
     task_id = str(uuid.uuid4())
+    logging.info(f'[{task_id}] About to start processing')
     
     # Option 1: Run synchronously (for testing)
-    # _process_and_callback(lat, lon, name, CALLBACK_URL, task_id, demo_ID)
+    _process_and_callback(lat, lon, name, CALLBACK_URL, task_id, demo_ID)
     
     # Option 2: Run asynchronously (uncomment for production)
-    thread = threading.Thread(
-        target=_process_and_callback,
-        args=(lat, lon, name, CALLBACK_URL, task_id, demo_ID),
-        daemon=True
-    )
-    thread.start()
+    # thread = threading.Thread(
+    #     target=_process_and_callback,
+    #     args=(lat, lon, name, CALLBACK_URL, task_id, demo_ID),
+    #     daemon=True
+    # )
+    # thread.start()
 
     resp = {
         'task_id': task_id,
